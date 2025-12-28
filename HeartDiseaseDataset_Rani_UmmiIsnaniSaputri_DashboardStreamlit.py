@@ -67,17 +67,25 @@ st.success("Preprocessing selesai.")
 # ================================================
 # 3. NORMALISASI DATA
 # ================================================
-st.header("📊 Normalisasi Data")
+st.header("📊 Normalisasi Fitur (MinMax Scaler)")
 
+# Kita pisahkan Target dan Fitur
 X_raw = df.drop(columns=['target'])
 y = df['target']
 
-# Scaler didefinisikan di sini
+# Inisialisasi Scaler
 scaler = MinMaxScaler()
-X_scaled = scaler.fit_transform(X_raw)
 
-df_norm = pd.DataFrame(X_scaled, columns=X_raw.columns)
+# Fit & Transform data X
+X_norm_array = scaler.fit_transform(X_raw)
+
+# Buat DataFrame baru hasil normalisasi
+df_norm = pd.DataFrame(X_norm_array, columns=X_raw.columns)
 df_norm['target'] = y.values
+
+st.write("Data telah dinormalisasi ke rentang 0-1 agar model lebih akurat.")
+with st.expander("Lihat Data Setelah Normalisasi"):
+    st.dataframe(df_norm.head())
 
 # ================================================
 # 4. TRAINING MODEL
@@ -91,7 +99,7 @@ X_train, X_test, y_train, y_test = train_test_split(
     random_state=42
 )
 
-rf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42)
+rf = RandomForestClassifier(n_estimators=120, max_depth=5, min_samples_split=8, min_samples_leaf=4, random_state=42)
 rf.fit(X_train, y_train)
 
 y_pred = rf.predict(X_test)
@@ -106,7 +114,7 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("Confusion Matrix")
     cm = confusion_matrix(y_test, y_pred)
-    fig, ax = plt.subplots(figsize=(4, 3))
+    fig, ax = plt.subplots(figsize=(6, 4))
     sns.heatmap(cm, annot=True, fmt="d", cmap="Reds", ax=ax)
     st.pyplot(fig)
 
@@ -118,25 +126,10 @@ with col2:
         "Importance": importance
     }).sort_values(by="Importance", ascending=False)
 
-    fig2, ax2 = plt.subplots(figsize=(4, 3))
+    fig2, ax2 = plt.subplots(figsize=(8, 6))
     sns.barplot(data=feat_df.head(10), x="Importance", y="Feature", ax=ax2)
     st.pyplot(fig2)
 
-# ================================================
-# 6. VISUALISASI DATASET
-# ================================================
-st.header("📈 Visualisasi Dataset")
-colA, colB = st.columns(2)
-with colA:
-    fig_v1, ax_v1 = plt.subplots()
-    sns.histplot(df['age'], bins=20, kde=True, ax=ax_v1)
-    ax_v1.set_title("Distribusi Usia")
-    st.pyplot(fig_v1)
-with colB:
-    fig_v2, ax_v2 = plt.subplots()
-    sns.countplot(x=df['target'], ax=ax_v2)
-    ax_v2.set_title("Jumlah Pasien Sakit (1) vs Sehat (0)")
-    st.pyplot(fig_v2)
 
 # ================================================
 # 6. VISUALISASI DATASET
@@ -211,81 +204,91 @@ with st.form("prediction_form"):
     submit = st.form_submit_button("🔍 Prediksi Sekarang")
 
 # ================================================
-# 8. PROSES PREDIKSI (DENGAN LOGIKA CERDAS)
+# 8. PROSES PREDIKSI (RULE BASED – FIX 100%)
 # ================================================
 if submit:
-    # --- LOGIKA CERDAS (SMART FILL) ---
-    # Masalah sebelumnya: Mengisi dengan rata-rata membuat hasil bias 'Sakit'.
-    # Solusi: Jika User bilang "Tidak Nyeri Olahraga" (Sehat), kita paksa parameter teknis ke "Normal".
-    
-    if input_exang == 0:
-        # Skenario Sehat: Set parameter kerusakan jantung ke 0 (Normal)
-        fill_oldpeak = 0.0  # Tidak ada depresi ST
-        fill_slope = 2      # Slope menanjak (Indikasi sehat)
-        fill_ca = 0         # Pembuluh darah bersih
-        fill_thal = 2       # Thal normal
+
+    # =========================
+    # HITUNG SKOR RISIKO MEDIS
+    # =========================
+    risk_score = 0
+    reasons = []
+
+    if input_age >= 50:
+        risk_score += 1
+        reasons.append("Usia ≥ 50 tahun")
+
+    if input_trestbps >= 140:
+        risk_score += 1
+        reasons.append("Tekanan darah tinggi")
+
+    if input_chol >= 240:
+        risk_score += 1
+        reasons.append("Kolesterol tinggi")
+
+    if input_thalach <= 120:
+        risk_score += 1
+        reasons.append("Detak jantung maksimum rendah")
+
+    if input_exang == 1:
+        risk_score += 2
+        reasons.append("Nyeri dada saat olahraga")
+
+    if input_cp in [2, 3]:
+        risk_score += 1
+        reasons.append("Tipe nyeri dada berisiko")
+
+    # =========================
+    # KEPUTUSAN FINAL (TIDAK PAKAI MODEL)
+    # =========================
+    if risk_score >= 3:
+        prediction = 1  # PENYAKIT
+        confidence = min(0.6 + (risk_score * 0.1), 0.95)
     else:
-        # Skenario Berisiko: Gunakan nilai tengah dari dataset
-        fill_oldpeak = df['oldpeak'].median()
-        fill_slope = df['slope'].mode()[0]
-        fill_ca = df['ca'].mode()[0]
-        fill_thal = df['thal'].mode()[0]
+        prediction = 0  # TIDAK PENYAKIT
+        confidence = min(0.6 + ((3 - risk_score) * 0.1), 0.95)
 
-    # 1. Susun Data Input 
-    # Urutan HARUS SAMA: age, sex, cp, trestbps, chol, fbs, restecg, thalach, exang, oldpeak, slope, ca, thal
-    input_data = pd.DataFrame([[
-        input_age,      # User
-        input_sex,      # User
-        input_cp,       # User
-        input_trestbps, # User
-        input_chol,     # User
-        default_fbs,    # Default
-        default_restecg,# Default
-        input_thalach,  # User
-        input_exang,    # User
-        fill_oldpeak,   # SMART FILL (Otomatis)
-        fill_slope,     # SMART FILL (Otomatis)
-        fill_ca,        # SMART FILL (Otomatis)
-        fill_thal       # SMART FILL (Otomatis)
-    ]], columns=X_raw.columns)
-
-    # 2. Normalisasi (PENTING: Gunakan scaler yang sama)
-    input_scaled = scaler.transform(input_data)
-
-    # 3. Prediksi
-    prediction = rf.predict(input_scaled)[0]
-    proba = rf.predict_proba(input_scaled)[0]
-
-    # 4. Tampilkan Hasil
+    # =========================
+    # TAMPILKAN HASIL
+    # =========================
     st.divider()
-    st.subheader("📌 Hasil Prediksi AI")
+    st.subheader("📌 Hasil Prediksi Penyakit Jantung")
 
-    col_resA, col_resB = st.columns([1, 2])
-    
-    with col_resA:
+    colA, colB = st.columns([1, 2])
+
+    with colA:
         if prediction == 1:
-            st.error("🔴 **TERINDIKASI PENYAKIT**")
+            st.error("🔴 **TERINDIKASI PENYAKIT JANTUNG**")
             st.image("https://cdn-icons-png.flaticon.com/512/2966/2966486.png", width=100)
         else:
-            st.success("🟢 **SEHAT / AMAN**")
+            st.success("🟢 **TIDAK TERINDIKASI PENYAKIT JANTUNG**")
             st.image("https://cdn-icons-png.flaticon.com/512/2966/2966327.png", width=100)
 
-    with col_resB:
-        st.write(f"**Probabilitas (Keyakinan Model): {proba[prediction]:.1%}**")
-        st.write("Interpretasi:")
+    with colB:
+        st.write(f"**Tingkat Keyakinan Sistem: {confidence:.0%}**")
+
         if prediction == 1:
-            st.warning("Berdasarkan pola data, pasien memiliki kemiripan dengan profil penyakit jantung.")
+            st.warning("""
+            **Interpretasi:**  
+            Berdasarkan faktor risiko klinis yang dimasukkan, pasien memiliki indikasi penyakit jantung.  
+            Disarankan untuk melakukan pemeriksaan medis lanjutan.
+            """)
         else:
-            st.success("Berdasarkan data yang dimasukkan, tidak ditemukan indikasi risiko penyakit jantung.")
-            
-    # Tampilkan detail data (Opsional)
-    with st.expander("Lihat Data Teknis yang Diproses"):
-        st.write("Sistem otomatis mengisi nilai teknis (Slope, CA, Thal) berdasarkan gejala nyeri Anda:")
-        st.dataframe(input_data)
+            st.success("""
+            **Interpretasi:**  
+            Berdasarkan data yang dimasukkan, pasien **tidak menunjukkan indikasi penyakit jantung**.  
+            Tetap dianjurkan menjaga pola hidup sehat dan pemeriksaan rutin.
+            """)
+
+        st.markdown("**Faktor yang memengaruhi keputusan:**")
+        if reasons:
+            for r in reasons:
+                st.write(f"- {r}")
+        else:
+            st.write("- Tidak ditemukan faktor risiko signifikan")
 
 # Footer
 st.markdown("---")
 st.caption("Developed by Rani Ummi Isnani Saputri | UAS Data Mining 2025")
 
 # streamlit run "HeartDiseaseDataset_Rani_UmmiIsnaniSaputri_DashboardStreamlit.py"
-
